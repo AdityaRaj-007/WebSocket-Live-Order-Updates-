@@ -3,6 +3,16 @@ import { v4 as uuidv4 } from "uuid";
 import WebSocket, { WebSocketServer } from "ws";
 import http from "http";
 
+type OrderStatus = "pending" | "preparing" | "delivered" | "failed";
+
+interface OrderState {
+  id: string;
+  symbol: string;
+  amount: number;
+  status: OrderStatus;
+  socket?: WebSocket;
+}
+
 const PORT = process.env.PORT || 3000;
 
 const app = express();
@@ -12,90 +22,144 @@ const server = http.createServer(app);
 
 const websocket = new WebSocketServer({ noServer: true });
 
-const orderSubscriptions = new Map<string, WebSocket>();
+const orders = new Map<string, OrderState>();
 
-websocket.on("connection", (ws: WebSocket, request: http.IncomingMessage) => {
-  console.log("New Client connected!");
+// websocket.on("connection", (ws: WebSocket, request: http.IncomingMessage) => {
+//   console.log("New Client connected!");
 
-  const url = new URL(request.url!, `http://${request.headers.host}`);
-  const orderId = url.searchParams.get("orderId");
+//   const url = new URL(request.url!, `http://${request.headers.host}`);
+//   const orderId = url.searchParams.get("orderId");
 
-  if (!orderId) {
-    ws.close();
-    return;
-  }
+//   if (!orderId) {
+//     ws.close();
+//     return;
+//   }
 
-  console.log(`Websocket connection established for order: ${orderId}`);
-  orderSubscriptions.set(orderId, ws);
+//   console.log(`Websocket connection established for order: ${orderId}`);
+//   orderSubscriptions.set(orderId, ws);
 
-  ws.on("close", () => {
-    console.log("Client disconnected!");
-    orderSubscriptions.delete(orderId);
+//   ws.on("close", () => {
+//     console.log("Client disconnected!");
+//     orderSubscriptions.delete(orderId);
+//   });
+// });
+
+const startOrderProcessing = (orderId: string) => {
+  const processStep = (
+    status: OrderStatus,
+    delay: number,
+    next?: () => void
+  ) => {
+    setTimeout(() => {
+      const order = orders.get(orderId);
+
+      if (!order) return;
+
+      order.status = status;
+
+      console.log(`Order ${orderId}, status changed to: ${status}`);
+
+      if (order.socket && order.socket.readyState === WebSocket.OPEN) {
+        order.socket.send(
+          JSON.stringify({
+            orderId,
+            status,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      }
+
+      if (next) next();
+
+      if (status === "delivered" || status === "failed") {
+        if (order.socket) order.socket.close();
+        orders.delete(orderId);
+      }
+    }, delay);
+  };
+
+  processStep("pending", 500, () => {
+    processStep("preparing", 2000, () => {
+      processStep("delivered", 5000);
+    });
   });
-});
+};
 
 server.on("upgrade", (request, socket, head) => {
   const url = new URL(request.url!, `http://${request.headers.host}`);
 
-  if (url.pathname === "/order/stream") {
+  if (url.pathname === "/api/orders") {
     const orderId = url.searchParams.get("orderId");
 
-    if (!orderId) {
+    if (!orderId || !orders.has(orderId)) {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.destroy();
       return;
     }
 
     websocket.handleUpgrade(request, socket, head, (ws) => {
-      websocket.emit("connection", ws, request);
+      //   websocket.emit("connection", ws, request);
+      const order = orders.get(orderId);
+
+      if (order) {
+        order.socket = ws;
+        console.log(`Connection upgraded on /api/order for order ${orderId}`);
+      }
     });
   } else {
     socket.destroy();
   }
 });
 
-const broadcastStatus = (orderId: string, status: string) => {
-  const subscribers = orderSubscriptions.get(orderId);
+// const broadcastStatus = (orderId: string, status: string) => {
+//   const subscribers = orderSubscriptions.get(orderId);
 
-  if (subscribers && subscribers.readyState === WebSocket.OPEN) {
-    console.log('Connection is live let"s send order updates!');
-    subscribers.send(
-      JSON.stringify({
-        orderId,
-        status,
-        timestamp: new Date().toISOString(),
-      })
-    );
+//   if (subscribers && subscribers.readyState === WebSocket.OPEN) {
+//     console.log('Connection is live let"s send order updates!');
+//     subscribers.send(
+//       JSON.stringify({
+//         orderId,
+//         status,
+//         timestamp: new Date().toISOString(),
+//       })
+//     );
+//   }
+// };
+
+app.post("/api/orders", (req: Request, res: Response) => {
+  const { symbol, amount } = req.body;
+
+  if (!symbol || !amount) {
+    res.status(400).json({ error: "Invalid order data!" });
+    return;
   }
-};
-
-app.post("/order", (req: Request, res: Response) => {
   const orderId = uuidv4();
 
-  res.json({
-    message: "Order placed",
-    orderId: orderId,
-    upgradeUrl: `/order/stream?orderId=${orderId}`,
+  orders.set(orderId, {
+    id: orderId,
+    symbol,
+    amount,
+    status: "pending",
   });
+
+  console.log(`📝 Order received, ID: ${orderId}`);
+
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    Connection: "keep-alive",
+    "Keep-Alive": "timeout=10",
+  });
+
+  res.end(
+    JSON.stringify({
+      orderId,
+      message: "Order accepted. Please upgrade to WebSocket on this endpoint.",
+    })
+  );
 
   console.log(`Starting process for ${orderId}`);
 
-  setTimeout(() => broadcastStatus(orderId, "pending"), 100000);
-
-  setTimeout(() => {
-    broadcastStatus(orderId, "preparing");
-  }, 200000);
-
-  setTimeout(() => {
-    broadcastStatus(orderId, "delivered");
-    const ws = orderSubscriptions.get(orderId);
-
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      console.log(`Closing websocket connection for order ${orderId}`);
-      ws.close();
-    }
-
-    orderSubscriptions.delete(orderId);
-  }, 250000);
+  startOrderProcessing(orderId);
 });
 
 server.listen(PORT, () => {
