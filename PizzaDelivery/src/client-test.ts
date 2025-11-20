@@ -4,6 +4,7 @@ import WebSocket from "ws";
 // Configuration
 const HOST = "localhost";
 const PORT = 3000;
+// MAKE SURE THIS MATCHES YOUR SERVER.TS EXACTLY
 const ENDPOINT = "/api/orders";
 
 function submitAndWatchOrder() {
@@ -19,84 +20,74 @@ function submitAndWatchOrder() {
         "Content-Type": "application/json",
         Connection: "keep-alive",
       },
-      // Keep socket alive, limit to 1 to force reuse
       agent: new http.Agent({ keepAlive: true, maxSockets: 1 }),
     },
     (res) => {
-      // --- FIX IS HERE ---
-      // Capture the socket IMMEDIATELY, before the response body is consumed.
-      // Waiting for 'end' is too late in Node v22+.
       const socket = res.socket;
-
-      if (!socket) {
-        console.error("❌ Immediate Error: Socket not found on response.");
-        return;
-      }
-
-      // Prevent the Agent from destroying/recycling this socket automatically
-      socket.removeAllListeners("timeout");
-      socket.setTimeout(0);
 
       let buffer = "";
       res.on("data", (chunk) => (buffer += chunk));
 
       res.on("end", () => {
+        // --- DEBUGGING: CHECK STATUS CODE ---
         if (res.statusCode !== 200) {
-          console.error(`❌ Server Error: ${res.statusCode}`);
+          console.error(
+            `❌ Server responded with Status Code: ${res.statusCode}`
+          );
+          console.error(`❌ Response Body: \n${buffer}`);
+          console.error(
+            "👉 Hint: Check if SERVER path and CLIENT path match exactly."
+          );
           return;
         }
 
         try {
           const data = JSON.parse(buffer);
           const orderId = data.orderId;
+
           console.log(`🟢 2. Order Created! ID: ${orderId}`);
+
           console.log(
-            `🔌 Socket Info: Local Port ${socket.localPort} (Reusing connection)`
+            `🔌 Socket Info: Local Port ${socket?.localPort} (Reusing this connection)`
           );
 
-          console.log(`🔵 3. Upgrading to WebSocket...`);
+          console.log(`🔵 3. Upgrading to WebSocket on SAME endpoint...`);
 
-          // Small delay to allow HTTP parser to detach cleanly
-          setTimeout(() => {
-            const wsUrl = `ws://${HOST}:${PORT}${ENDPOINT}?orderId=${orderId}`;
+          const wsUrl = `ws://${HOST}:${PORT}${ENDPOINT}?orderId=${orderId}`;
 
-            // Cast options to 'any' to bypass TS check
-            const ws = new WebSocket(wsUrl, { socket: socket } as any);
+          // Cast to 'any' to fix TS error
+          const ws = new WebSocket(wsUrl, { socket: socket } as any);
 
-            ws.on("open", () => {
-              console.log("🟢 4. WebSocket Connected successfully!");
-            });
+          ws.on("open", () => {
+            console.log("🟢 4. WebSocket Connected!");
+          });
 
-            ws.on("message", (msg: Buffer) => {
-              const update = JSON.parse(msg.toString());
-              console.log(
-                `📩 UPDATE: [${update.status.toUpperCase()}] at ${
-                  update.timestamp
-                }`
-              );
+          ws.on("message", (msg: Buffer) => {
+            const update = JSON.parse(msg.toString());
+            console.log(
+              `📩 UPDATE: [${update.status.toUpperCase()}] at ${
+                update.timestamp
+              }`
+            );
 
-              if (update.status === "delivered" || update.status === "failed") {
-                console.log("🏁 Order finished. Closing.");
-                ws.close();
-              }
-            });
+            if (update.status === "delivered" || update.status === "failed") {
+              console.log("🏁 Order finished. Closing.");
+              ws.close();
+            }
+          });
 
-            ws.on("error", (e: Error) => {
-              console.error("❌ WebSocket Error:", e.message);
-            });
+          ws.on("error", (e: Error) => console.error("WS Error", e));
 
-            ws.on("close", () => {
-              console.log("🔴 WebSocket Closed");
-            });
-          }, 100); // 100ms delay for safety
+          ws.on("close", () => {
+            console.log("🔴 WebSocket Closed");
+          });
         } catch (e) {
-          console.error("❌ Parse Error:", e);
+          console.error("❌ JSON Parse Error:", e);
+          console.log("Raw Buffer:", buffer);
         }
       });
     }
   );
-
-  req.on("error", (e) => console.error("❌ Request Error:", e));
 
   req.write(JSON.stringify({ symbol: "BTC", amount: 0.5 }));
   req.end();

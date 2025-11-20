@@ -24,26 +24,6 @@ const websocket = new WebSocketServer({ noServer: true });
 
 const orders = new Map<string, OrderState>();
 
-// websocket.on("connection", (ws: WebSocket, request: http.IncomingMessage) => {
-//   console.log("New Client connected!");
-
-//   const url = new URL(request.url!, `http://${request.headers.host}`);
-//   const orderId = url.searchParams.get("orderId");
-
-//   if (!orderId) {
-//     ws.close();
-//     return;
-//   }
-
-//   console.log(`Websocket connection established for order: ${orderId}`);
-//   orderSubscriptions.set(orderId, ws);
-
-//   ws.on("close", () => {
-//     console.log("Client disconnected!");
-//     orderSubscriptions.delete(orderId);
-//   });
-// });
-
 const startOrderProcessing = (orderId: string) => {
   const processStep = (
     status: OrderStatus,
@@ -98,7 +78,6 @@ server.on("upgrade", (request, socket, head) => {
     }
 
     websocket.handleUpgrade(request, socket, head, (ws) => {
-      //   websocket.emit("connection", ws, request);
       const order = orders.get(orderId);
 
       if (order) {
@@ -110,21 +89,6 @@ server.on("upgrade", (request, socket, head) => {
     socket.destroy();
   }
 });
-
-// const broadcastStatus = (orderId: string, status: string) => {
-//   const subscribers = orderSubscriptions.get(orderId);
-
-//   if (subscribers && subscribers.readyState === WebSocket.OPEN) {
-//     console.log('Connection is live let"s send order updates!');
-//     subscribers.send(
-//       JSON.stringify({
-//         orderId,
-//         status,
-//         timestamp: new Date().toISOString(),
-//       })
-//     );
-//   }
-// };
 
 app.post("/api/orders", (req: Request, res: Response) => {
   const { symbol, amount } = req.body;
