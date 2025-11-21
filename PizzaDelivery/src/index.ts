@@ -2,6 +2,8 @@ import express, { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
 import WebSocket, { WebSocketServer } from "ws";
 import http from "http";
+import { Worker } from "worker_threads";
+import path from "path";
 
 type OrderStatus = "pending" | "preparing" | "delivered" | "failed";
 
@@ -25,43 +27,72 @@ const websocket = new WebSocketServer({ noServer: true });
 const orders = new Map<string, OrderState>();
 
 const startOrderProcessing = (orderId: string) => {
-  const processStep = (
-    status: OrderStatus,
-    delay: number,
-    next?: () => void
-  ) => {
-    setTimeout(() => {
-      const order = orders.get(orderId);
+  //   const processStep = (
+  //     status: OrderStatus,
+  //     delay: number,
+  //     next?: () => void
+  //   ) => {
+  //     setTimeout(() => {
+  //       const order = orders.get(orderId);
 
-      if (!order) return;
+  //       if (!order) return;
 
-      order.status = status;
+  //       order.status = status;
 
-      console.log(`Order ${orderId}, status changed to: ${status}`);
+  //       console.log(`Order ${orderId}, status changed to: ${status}`);
+
+  //       if (order.socket && order.socket.readyState === WebSocket.OPEN) {
+  //         order.socket.send(
+  //           JSON.stringify({
+  //             orderId,
+  //             status,
+  //             timestamp: new Date().toISOString(),
+  //           })
+  //         );
+  //       }
+
+  //       if (next) next();
+
+  //       if (status === "delivered" || status === "failed") {
+  //         if (order.socket) order.socket.close();
+  //         orders.delete(orderId);
+  //       }
+  //     }, delay);
+  //   };
+
+  //   processStep("pending", 500, () => {
+  //     processStep("preparing", 2000, () => {
+  //       processStep("delivered", 5000);
+  //     });
+  //   });
+  const worker = new Worker(path.resolve(__dirname, "orderWorker.js"));
+
+  worker.postMessage({
+    orderId,
+    steps: [
+      {
+        status: "pending",
+        delay: 1000,
+      },
+      { status: "preparing", delay: 2000 },
+      { status: "delivered", delay: 5000 },
+    ],
+  });
+
+  worker.on("message", (msg) => {
+    const order = orders.get(orderId);
+
+    if (!order) return;
+
+    if (msg.status) {
+      order.status = msg.status;
+
+      console.log(`Worker update: ${orderId} -> ${msg.status}`);
 
       if (order.socket && order.socket.readyState === WebSocket.OPEN) {
-        order.socket.send(
-          JSON.stringify({
-            orderId,
-            status,
-            timestamp: new Date().toISOString(),
-          })
-        );
+        order.socket.send(JSON.stringify(msg));
       }
-
-      if (next) next();
-
-      if (status === "delivered" || status === "failed") {
-        if (order.socket) order.socket.close();
-        orders.delete(orderId);
-      }
-    }, delay);
-  };
-
-  processStep("pending", 500, () => {
-    processStep("preparing", 2000, () => {
-      processStep("delivered", 5000);
-    });
+    }
   });
 };
 
