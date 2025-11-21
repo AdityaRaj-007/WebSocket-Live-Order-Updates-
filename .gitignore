@@ -1,3 +1,4 @@
 node_modules
+dist
 PizzaDelivery/src/server.ts
 PizzaDelivery/src/client-server-test.ts

@@ -93,6 +93,22 @@ const startOrderProcessing = (orderId: string) => {
         order.socket.send(JSON.stringify(msg));
       }
     }
+
+    if (msg.done) {
+      console.log(`Order ${orderId} completed, cleaning up!`);
+
+      if (order.socket) order.socket.close();
+      orders.delete(orderId);
+      worker.terminate();
+    }
+  });
+
+  worker.on("error", (err) => {
+    console.log("Unknow error", err);
+  });
+
+  worker.on("exit", (code) => {
+    console.log(`Worker exited with code ${code}`);
   });
 };
 
